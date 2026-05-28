@@ -7,6 +7,51 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include "../../include/rtp.h"
+#include <queue>
+#include <vector>
+#include <mutex>
+#include <thread>
+
+// Puerto de recepción de audio (según tu código)
+#define RECEIVER_PORT 5000 
+#define FRAME_SIZE 960
+
+// Variables globales del RECEPTOR
+OpusDecoder *opusDecoder;
+int receiverSockfd;
+
+struct AudioFrame {
+    std::vector<int16_t> samples;
+};
+std::queue<AudioFrame> jitterBuffer;
+std::mutex bufferMutex;
+
+// CALLBACK DEL RECEPTOR (Tu código exacto de consola con Jitter Buffer)
+static int receiverAudioCallback(
+    const void *inputBuffer, void *outputBuffer,
+    unsigned long framesPerBuffer,
+    const PaStreamCallbackTimeInfo* timeInfo,
+    PaStreamCallbackFlags statusFlags, void *userData
+) {
+    int16_t *out = (int16_t*)outputBuffer;
+    std::lock_guard<std::mutex> lock(bufferMutex);
+
+    if (!jitterBuffer.empty()) {
+        AudioFrame frame = jitterBuffer.front();
+        jitterBuffer.pop();
+        for (int i = 0; i < FRAME_SIZE; i++) {
+            *out++ = frame.samples[i];
+        }
+    } else {
+        // Silencio si el buffer está vacío
+        for (int i = 0; i < FRAME_SIZE; i++) {
+            *out++ = 0;
+        }
+    }
+    return paContinue;
+}
+
+
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
@@ -76,11 +121,89 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-// Inicializamos el socket de Qt
+    // 1. Inicializar Socket de Control y Señales de Qt (Lo que ya tenías)
     udpControlSocket = new QUdpSocket(this);
-
-    // Le decimos a Qt: "Cuando este socket reciba datos de la red, ejecuta automáticamente procesarRespuestaUDP"
     connect(udpControlSocket, &QUdpSocket::readyRead, this, &MainWindow::procesarRespuestaUDP);
+
+    // =================================================================
+    // NÚCLEO DEL RECEPTOR (Código de tu receiver.cpp integrado en Qt)
+    // =================================================================
+    int err;
+    opusDecoder = opus_decoder_create(SAMPLE_RATE, CHANNELS, &err);
+    
+    receiverSockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in recAddr{};
+    recAddr.sin_family = AF_INET;
+    recAddr.sin_port = htons(RECEIVER_PORT); // Escucha en el puerto 5000
+    recAddr.sin_addr.s_addr = INADDR_ANY;
+    ::bind(receiverSockfd, (sockaddr*)&recAddr, sizeof(recAddr));
+
+    // Lanzamos tu hilo nativo de red (Jitter Buffer)
+    std::thread receiverNetworkThread([this]() {
+        while (true) {
+            char packet[4096];
+            int bytesReceived = recvfrom(receiverSockfd, packet, sizeof(packet), 0, nullptr, nullptr);
+            if (bytesReceived <= (int)sizeof(RTPHeader)) continue;
+
+            RTPHeader header{};
+            memcpy(&header, packet, sizeof(RTPHeader));
+
+            unsigned char *opusData = (unsigned char*)(packet + sizeof(RTPHeader));
+            int opusSize = bytesReceived - sizeof(RTPHeader);
+
+            std::vector<int16_t> pcm(FRAME_SIZE);
+            int decodedSamples = opus_decode(opusDecoder, opusData, opusSize, pcm.data(), FRAME_SIZE, 0);
+
+            if (decodedSamples > 0) {
+                std::lock_guard<std::mutex> lock(bufferMutex);
+                jitterBuffer.push({pcm});
+                if (jitterBuffer.size() > 50) {
+                    jitterBuffer.pop();
+                }
+            }
+        }
+    });
+    receiverNetworkThread.detach();
+
+    // Arrancar PortAudio para la REPRODUCCIÓN (Output)
+    Pa_Initialize();
+    PaStream *receiverStream;
+    // Notar que pasamos '1' en outputChannels y '0' en inputChannels
+    Pa_OpenDefaultStream(&receiverStream, 0, 1, paInt16, SAMPLE_RATE, FRAME_SIZE, receiverAudioCallback, nullptr);
+    Pa_StartStream(receiverStream);
+
+    ui->txtLogs->append("Sistema Receptor escuchando activamente en puerto 5000...");
+    
+    // =================================================================
+    // HILO DE RESPUESTA AL BROADCAST (Tu discovery.cpp integrado)
+    // =================================================================
+    std::thread discoveryThread([]() {
+        int discSock = socket(AF_INET, SOCK_DGRAM, 0);
+        int broadcastEnable = 1;
+        setsockopt(discSock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(5001); // Puerto de control
+        addr.sin_addr.s_addr = INADDR_ANY;
+        
+        if (::bind(discSock, (sockaddr*)&addr, sizeof(addr)) >= 0) {
+            while (true) {
+                char buffer[1024];
+                sockaddr_in senderAddr{};
+                socklen_t senderLen = sizeof(senderAddr);
+                int bytes = recvfrom(discSock, buffer, sizeof(buffer) - 1, 0, (sockaddr*)&senderAddr, &senderLen);
+                if (bytes > 0) {
+                    buffer[bytes] = '\0';
+                    if (strcmp(buffer, "DISCOVER") == 0) {
+                        const char* response = "DISCOVER_RESPONSE:HarmoniLAN";
+                        sendto(discSock, response, strlen(response), 0, (sockaddr*)&senderAddr, senderLen);
+                    }
+                }
+            }
+        }
+    });
+    discoveryThread.detach();
 }
 
 MainWindow::~MainWindow()
@@ -95,6 +218,10 @@ MainWindow::~MainWindow()
         opus_encoder_destroy(opusEncoder);
     }
     ::close(audioSockfd);
+    if (opusDecoder) {
+        opus_decoder_destroy(opusDecoder);
+    }
+    ::close(receiverSockfd);
     
     delete ui;
 }
