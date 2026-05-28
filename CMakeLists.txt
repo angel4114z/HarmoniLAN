@@ -24,6 +24,14 @@ add_executable(receiver
     src/receiver.cpp
 )
 
+add_executable(discovery
+    src/discovery.cpp
+)
+
+add_executable(discover_client
+    src/discover_client.cpp
+)
+
 target_link_libraries(sender
     ${PORTAUDIO_LIBRARIES}
     ${OPUS_LIBRARIES}
