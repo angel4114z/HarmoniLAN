@@ -6,15 +6,28 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdint>
+#include "../include/rtp.h"
+#include <thread>
+#include <mutex>
+#include <queue>
+#include <vector>
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
 #define FRAME_SIZE 960
 #define PORT 5000
 
-int16_t audioBuffer[FRAME_SIZE];
+//int16_t audioBuffer[FRAME_SIZE];
 
 OpusDecoder *decoder;
+
+struct AudioFrame {
+    std::vector<int16_t> samples;
+};
+
+std::queue<AudioFrame> jitterBuffer;
+
+std::mutex bufferMutex;
 
 static int audioCallback(
     const void *inputBuffer,
@@ -27,8 +40,24 @@ static int audioCallback(
 
     int16_t *out = (int16_t*)outputBuffer;
 
-    for (int i = 0; i < FRAME_SIZE; i++) {
-        *out++ = audioBuffer[i];
+    std::lock_guard<std::mutex> lock(bufferMutex);
+
+    if (!jitterBuffer.empty()) {
+
+        AudioFrame frame =
+            jitterBuffer.front();
+
+        jitterBuffer.pop();
+
+        for (int i = 0; i < FRAME_SIZE; i++) {
+            *out++ = frame.samples[i];
+        }
+
+    } else {
+
+        for (int i = 0; i < FRAME_SIZE; i++) {
+            *out++ = 0;
+        }
     }
 
     return paContinue;
@@ -60,6 +89,71 @@ int main() {
 
     bind(sockfd, (sockaddr*)&serverAddr, sizeof(serverAddr));
 
+    std::thread networkThread([&]() {
+
+    while (true) {
+
+        char packet[4096];
+
+        int bytesReceived = recvfrom(
+            sockfd,
+            packet,
+            sizeof(packet),
+            0,
+            nullptr,
+            nullptr
+        );
+
+        if (bytesReceived <= (int)sizeof(RTPHeader))
+            continue;
+
+        RTPHeader header{};
+
+        memcpy(
+            &header,
+            packet,
+            sizeof(RTPHeader)
+        );
+
+        unsigned char *opusData =
+            (unsigned char*)
+            (packet + sizeof(RTPHeader));
+
+        int opusSize =
+            bytesReceived - sizeof(RTPHeader);
+
+        std::vector<int16_t> pcm(
+            FRAME_SIZE
+        );
+
+        int decodedSamples =
+            opus_decode(
+                decoder,
+                opusData,
+                opusSize,
+                pcm.data(),
+                FRAME_SIZE,
+                0
+            );
+
+        if (decodedSamples > 0) {
+
+            std::lock_guard<std::mutex>
+                lock(bufferMutex);
+
+            jitterBuffer.push({
+                pcm
+            });
+
+            if (jitterBuffer.size() > 50) {
+                jitterBuffer.pop();
+            }
+        }
+    }
+});
+
+networkThread.detach();
+
     Pa_Initialize();
 
     PaStream *stream;
@@ -78,36 +172,8 @@ int main() {
     Pa_StartStream(stream);
 
     std::cout << "receptor con opus iniciado en puerto: " << PORT << "\n";
-
-    while (true) {
-
-        unsigned char opusData[4000];
-
-        int bytesReceived = recvfrom(
-            sockfd,
-            opusData,
-            sizeof(opusData),
-            0,
-            nullptr,
-            nullptr
-        );
-
-        if (bytesReceived > 0) {
-
-            int samplesDecoded = opus_decode(
-                decoder,
-                opusData,
-                bytesReceived,
-                audioBuffer,
-                FRAME_SIZE,
-                0
-            );
-
-            if (samplesDecoded < 0) {
-                std::cerr << "Error al decodificar Opus: " << opus_strerror(samplesDecoded) << std::endl;
-            }
-        }
-    }
+    std::cout << "Presiona enter para salir\n";
+    std::cin.get();
 
     opus_decoder_destroy(decoder);
 

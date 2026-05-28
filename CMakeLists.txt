@@ -5,6 +5,7 @@ project(HarmoniLAN)
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 
 pkg_check_modules(PORTAUDIO REQUIRED portaudio-2.0)
 pkg_check_modules(OPUS REQUIRED opus)
@@ -31,6 +32,7 @@ target_link_libraries(sender
 target_link_libraries(receiver
     ${PORTAUDIO_LIBRARIES}
     ${OPUS_LIBRARIES}
+    Threads::Threads
 )
 
 #add_executable(harmonilan
@@ -40,4 +42,5 @@ target_link_libraries(receiver
 #target_link_libraries(harmonilan
 #    ${PORTAUDIO_LIBRARIES}
 #    ${OPUS_LIBRARIES}
+#    Threads::Threads
 #)

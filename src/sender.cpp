@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdint>
+#include "../include/rtp.h"
 
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
@@ -16,6 +17,10 @@ int sockfd;
 sockaddr_in serverAddr;
 
 OpusEncoder *encoder;
+
+uint16_t sequenceNumber = 0;
+uint32_t timestamp = 0;
+uint32_t ssrc = 12345;
 
 static int audioCallback(
     const void *inputBuffer,
@@ -43,14 +48,36 @@ static int audioCallback(
 
     if (encodedBytes > 0) {
 
+        char packet[4096];
+
+        RTPHeader header{};
+            
+        header.versionPayload = 0x80;
+        header.payloadType = 111;
+            
+        header.sequenceNumber = htons(sequenceNumber++);
+        header.timestamp = htonl(timestamp);
+            
+        header.ssrc = htonl(ssrc);
+            
+        memcpy(packet, &header, sizeof(RTPHeader));
+            
+        memcpy(
+            packet + sizeof(RTPHeader),
+            opusData,
+            encodedBytes
+        );
+        
         sendto(
             sockfd,
-            opusData,
-            encodedBytes,
+            packet,
+            sizeof(RTPHeader) + encodedBytes,
             0,
             (sockaddr*)&serverAddr,
             sizeof(serverAddr)
         );
+        
+        timestamp += FRAME_SIZE;
     }
 
     return paContinue;
