@@ -25,10 +25,12 @@ add_executable(receiver
 
 target_link_libraries(sender
     ${PORTAUDIO_LIBRARIES}
+    ${OPUS_LIBRARIES}
 )
 
 target_link_libraries(receiver
     ${PORTAUDIO_LIBRARIES}
+    ${OPUS_LIBRARIES}
 )
 
 #add_executable(harmonilan

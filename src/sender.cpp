@@ -1,16 +1,21 @@
 #include <iostream>
 #include <portaudio.h>
+#include <opus/opus.h>
 
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <cstdint>
 
 #define SAMPLE_RATE 48000
-#define FRAMES_PER_BUFFER 256
+#define CHANNELS 1
+#define FRAME_SIZE 960
 #define PORT 5000
 
 int sockfd;
 sockaddr_in serverAddr;
+
+OpusEncoder *encoder;
 
 static int audioCallback(
     const void *inputBuffer,
@@ -21,12 +26,27 @@ static int audioCallback(
     void *userData
 ) {
 
-    if (inputBuffer != nullptr) {
+    if (inputBuffer == nullptr)
+        return paContinue;
+
+    const int16_t *pcm = (const int16_t*)inputBuffer;
+
+    unsigned char opusData[4000];
+
+    int encodedBytes = opus_encode(
+        encoder,
+        pcm,
+        FRAME_SIZE,
+        opusData,
+        sizeof(opusData)
+    );
+
+    if (encodedBytes > 0) {
 
         sendto(
             sockfd,
-            inputBuffer,
-            framesPerBuffer * sizeof(float),
+            opusData,
+            encodedBytes,
             0,
             (sockaddr*)&serverAddr,
             sizeof(serverAddr)
@@ -39,7 +59,21 @@ static int audioCallback(
 int main(int argc, char* argv[]) {
 
     if (argc < 2) {
-        std::cout << "Uso: ./sender <IP_DESTINO>\n";
+        std::cout << "Uso: ./sender <IP>\n";
+        return 1;
+    }
+
+    int err;
+
+    encoder = opus_encoder_create(
+        SAMPLE_RATE,
+        CHANNELS,
+        OPUS_APPLICATION_VOIP,
+        &err
+    );
+
+    if (err != OPUS_OK) {
+        std::cerr << "Error creando encoder\n";
         return 1;
     }
 
@@ -58,22 +92,25 @@ int main(int argc, char* argv[]) {
         &stream,
         1,
         0,
-        paFloat32,
+        paInt16,
         SAMPLE_RATE,
-        FRAMES_PER_BUFFER,
+        FRAME_SIZE,
         audioCallback,
         nullptr
     );
 
     Pa_StartStream(stream);
 
-    std::cout << "Enviando audio a " << argv[1] << "\n";
+    std::cout << "Enviando audio (con opus) hacia: " << argv[1] << "\n";
     std::cout << "Presiona enter para salir\n";
 
     std::cin.get();
 
     Pa_StopStream(stream);
     Pa_CloseStream(stream);
+
+    opus_encoder_destroy(encoder);
+
     Pa_Terminate();
 
     close(sockfd);
