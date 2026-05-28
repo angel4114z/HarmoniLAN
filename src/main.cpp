@@ -34,7 +34,7 @@ int main() {
     err = Pa_Initialize();
 
     if (err != paNoError) {
-        std::cerr << "Error inicializando PortAudio\n";
+        std::cerr << "Error iniciando PortAudio\n";
         return 1;
     }
 

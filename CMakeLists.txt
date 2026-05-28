@@ -15,11 +15,27 @@ include_directories(
     ${OPUS_INCLUDE_DIRS}
 )
 
-add_executable(harmonilan
-    src/main.cpp
+add_executable(sender
+    src/sender.cpp
 )
 
-target_link_libraries(harmonilan
-    ${PORTAUDIO_LIBRARIES}
-    ${OPUS_LIBRARIES}
+add_executable(receiver
+    src/receiver.cpp
 )
+
+target_link_libraries(sender
+    ${PORTAUDIO_LIBRARIES}
+)
+
+target_link_libraries(receiver
+    ${PORTAUDIO_LIBRARIES}
+)
+
+#add_executable(harmonilan
+#    src/main.cpp
+#)
+
+#target_link_libraries(harmonilan
+#    ${PORTAUDIO_LIBRARIES}
+#    ${OPUS_LIBRARIES}
+#)
