@@ -65,6 +65,38 @@ static int audioCallback(
 
 int main() {
 
+    std::thread discoveryThread([]() {
+        int discSock = socket(AF_INET, SOCK_DGRAM, 0);
+        int broadcastEnable = 1;
+        setsockopt(discSock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(5001); // Puerto de control
+        addr.sin_addr.s_addr = INADDR_ANY;
+        
+        if (bind(discSock, (sockaddr*)&addr, sizeof(addr)) >= 0) {
+            while (true) {
+                char buffer[1024];
+                sockaddr_in senderAddr{};
+                socklen_t senderLen = sizeof(senderAddr);
+                int bytes = recvfrom(discSock, buffer, sizeof(buffer) - 1, 0, (sockaddr*)&senderAddr, &senderLen);
+                if (bytes > 0) {
+                    buffer[bytes] = '\0';
+                    if (strcmp(buffer, "DISCOVER") == 0) {
+                        const char* response = "DISCOVER_RESPONSE:HarmoniLAN";
+                        sendto(discSock, response, strlen(response), 0, (sockaddr*)&senderAddr, senderLen);
+                    }
+                }
+            }
+        }
+    });
+    discoveryThread.detach(); // Corre en segundo plano respondiendo los "DISCOVER"
+    // =================================================================
+
+
+
+
     int err;
 
     decoder = opus_decoder_create(

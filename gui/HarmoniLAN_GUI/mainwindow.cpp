@@ -160,3 +160,29 @@ void MainWindow::on_btnPTT_released()
     ui->btnPTT->setText("Presionar para Hablar (PTT)");
     ui->btnPTT->setStyleSheet(""); // Vuelve al color normal
 }
+
+void MainWindow::on_chkHablaContinua_toggled(bool checked)
+{
+    if (checked) {
+        // Activamos la transmisión permanente
+        enviarAudio.store(true);
+
+        // Desactivamos el botón de PTT para que el usuario no se confunda
+        ui->btnPTT->setEnabled(false);
+        ui->btnPTT->setText("Micrófono Abierto (Habla Continua)");
+        ui->btnPTT->setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold;"); // Color verde
+
+        ui->txtLogs->append("Modo habla continua activado. Micrófono abierto.");
+    } else {
+        // Apagamos la transmisión permanente
+        enviarAudio.store(false);
+
+        // Reactivamos el botón PTT a su estado normal
+        ui->btnPTT->setEnabled(true);
+        ui->btnPTT->setText("Presionar para Hablar (PTT)");
+        ui->btnPTT->setStyleSheet(""); // Color normal
+
+        ui->txtLogs->append("Modo habla continua desactivado. Volviendo a PTT.");
+    }
+}
+

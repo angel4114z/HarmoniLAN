@@ -23,6 +23,8 @@ private slots:
     void on_btnPTT_pressed();  // <-- AGREGA ESTO
     void on_btnPTT_released(); // <-- AGREGA ESTO
 
+    void on_chkHablaContinua_toggled(bool checked);
+
 private:
     Ui::MainWindow *ui;
     QUdpSocket *udpControlSocket; // <-- AGREGA ESTO (El socket de control)
