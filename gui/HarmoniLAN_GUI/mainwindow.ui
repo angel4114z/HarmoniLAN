@@ -56,6 +56,19 @@
      <string>Buscar Equipos</string>
     </property>
    </widget>
+   <widget class="QPushButton" name="btnCrearSala">
+    <property name="geometry">
+     <rect>
+      <x>20</x>
+      <y>230</y>
+      <width>121</width>
+      <height>25</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Crear Sala</string>
+    </property>
+   </widget>
    <widget class="QTextEdit" name="txtLogs">
     <property name="geometry">
      <rect>

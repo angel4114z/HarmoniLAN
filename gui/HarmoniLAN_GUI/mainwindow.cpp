@@ -11,18 +11,25 @@
 #include <vector>
 #include <mutex>
 #include <thread>
+#include <map>
+#include <cstdlib>
+#include <ctime>
 
 #define RECEIVER_PORT 5000 
 #define FRAME_SIZE 960
 
-OpusDecoder *opusDecoder;
-int receiverSockfd;
-
 struct AudioFrame {
     std::vector<int16_t> samples;
 };
-std::queue<AudioFrame> jitterBuffer;
-std::mutex bufferMutex;
+
+struct UserAudioStream {
+    OpusDecoder* decoder;
+    std::queue<AudioFrame> jitterBuffer;
+};
+
+std::map<uint32_t, UserAudioStream> activeStreams;
+std::mutex streamsMutex;
+int receiverSockfd;
 
 static int receiverAudioCallback(
     const void *inputBuffer, void *outputBuffer,
@@ -31,19 +38,27 @@ static int receiverAudioCallback(
     PaStreamCallbackFlags statusFlags, void *userData
 ) {
     int16_t *out = (int16_t*)outputBuffer;
-    std::lock_guard<std::mutex> lock(bufferMutex);
+    std::lock_guard<std::mutex> lock(streamsMutex);
 
-    if (!jitterBuffer.empty()) {
-        AudioFrame frame = jitterBuffer.front();
-        jitterBuffer.pop();
-        for (int i = 0; i < FRAME_SIZE; i++) {
-            *out++ = frame.samples[i];
-        }
-    } else {
-        for (int i = 0; i < FRAME_SIZE; i++) {
-            *out++ = 0;
+    std::vector<int32_t> mixBuffer(FRAME_SIZE, 0);
+
+    for (auto it = activeStreams.begin(); it != activeStreams.end(); ++it) {
+        if (!it->second.jitterBuffer.empty()) {
+            AudioFrame frame = it->second.jitterBuffer.front();
+            it->second.jitterBuffer.pop();
+            for (int i = 0; i < FRAME_SIZE; i++) {
+                mixBuffer[i] += frame.samples[i];
+            }
         }
     }
+
+    for (int i = 0; i < FRAME_SIZE; i++) {
+        int32_t sample = mixBuffer[i];
+        if (sample > 32767) sample = 32767;
+        if (sample < -32768) sample = -32768;
+        *out++ = (int16_t)sample;
+    }
+
     return paContinue;
 }
 
@@ -62,12 +77,18 @@ PaStream *audioStream;
 
 uint16_t sequenceNumber = 0;
 uint32_t timestamp = 0;
-uint32_t ssrc = 12345;
+uint32_t my_ssrc = 0; // SSRC Dinámico (Se inicializará luego)
 
 std::atomic<bool> enviarAudio(false);
 
 std::string miNombreGlobal = "YoGUI";
 std::mutex nombreMutex;
+
+// Variables Globales para SALA HOST
+std::atomic<bool> esHostGlobal(false);
+std::mutex clientesMutex;
+// Usaremos la IP como String y la estructura sockaddr_in para reenviar
+std::map<std::string, sockaddr_in> clientesEnSala;
 
 static int audioCallback(
     const void *inputBuffer, void *outputBuffer,
@@ -94,7 +115,7 @@ static int audioCallback(
         header.payloadType = 111;
         header.sequenceNumber = htons(sequenceNumber++);
         header.timestamp = htonl(timestamp);
-        header.ssrc = htonl(ssrc);
+        header.ssrc = htonl(my_ssrc);
             
         memcpy(packet, &header, sizeof(RTPHeader));
         memcpy(packet + sizeof(RTPHeader), opusData, encodedBytes);
@@ -115,6 +136,9 @@ MainWindow::MainWindow(QWidget *parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
+
+    srand(time(nullptr));
+    if (my_ssrc == 0) my_ssrc = rand(); // SSRC Aleatorio para evitar colisiones
     
     buscandoEquipos = false;
     discoveryTimer = new QTimer(this);
@@ -126,9 +150,6 @@ MainWindow::MainWindow(QWidget *parent)
     udpControlSocket = new QUdpSocket(this);
     connect(udpControlSocket, &QUdpSocket::readyRead, this, &MainWindow::procesarRespuestaUDP);
 
-    int err;
-    opusDecoder = opus_decoder_create(SAMPLE_RATE, CHANNELS, &err);
-    
     receiverSockfd = socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in recAddr{};
     recAddr.sin_family = AF_INET;
@@ -136,27 +157,66 @@ MainWindow::MainWindow(QWidget *parent)
     recAddr.sin_addr.s_addr = INADDR_ANY;
     ::bind(receiverSockfd, (sockaddr*)&recAddr, sizeof(recAddr));
 
-    // Lanzamos tu hilo nativo de red (Jitter Buffer)
+    // Lanzamos tu hilo nativo de red (Jitter Buffer Múltiple)
     std::thread receiverNetworkThread([this]() {
         while (true) {
             char packet[4096];
-            int bytesReceived = recvfrom(receiverSockfd, packet, sizeof(packet), 0, nullptr, nullptr);
+            sockaddr_in senderAddr{};
+            socklen_t senderLen = sizeof(senderAddr);
+            int bytesReceived = recvfrom(receiverSockfd, packet, sizeof(packet), 0, (sockaddr*)&senderAddr, &senderLen);
             if (bytesReceived <= (int)sizeof(RTPHeader)) continue;
 
             RTPHeader header{};
             memcpy(&header, packet, sizeof(RTPHeader));
+            uint32_t sender_ssrc = ntohl(header.ssrc);
+
+            // Evitamos hacer eco reproduciendo nuestro propio audio
+            if (sender_ssrc == my_ssrc) continue;
+            
+            // Si somos Host, reenviamos el paquete recibido al resto de usuarios registrados
+            if (esHostGlobal.load()) {
+                char ipRec[INET_ADDRSTRLEN];
+                sockaddr_in sAddr;
+                socklen_t sLen = sizeof(sAddr);
+                getpeername(receiverSockfd, (sockaddr*)&sAddr, &sLen);
+                inet_ntop(AF_INET, &senderAddr.sin_addr, ipRec, sizeof(ipRec));
+                std::string currentIp(ipRec);
+
+                std::lock_guard<std::mutex> clLock(clientesMutex);
+                
+                // Registramos automáticamente a quien nos envíe audio en el puerto 5000 (Mágica conexión SFU)
+                if (clientesEnSala.find(currentIp) == clientesEnSala.end()) {
+                    clientesEnSala[currentIp] = senderAddr;
+                }
+
+                // Reenviar a todos menos a quien lo envió
+                for (auto const& [ipDest, destAddr] : clientesEnSala) {
+                    if (ipDest != currentIp) {
+                        sendto(receiverSockfd, packet, bytesReceived, 0, (sockaddr*)&destAddr, sizeof(destAddr));
+                    }
+                }
+            }
 
             unsigned char *opusData = (unsigned char*)(packet + sizeof(RTPHeader));
             int opusSize = bytesReceived - sizeof(RTPHeader);
 
+            std::lock_guard<std::mutex> lock(streamsMutex);
+
+            // Si es un usuario nuevo, le creamos su propio decodificador
+            if (activeStreams.find(sender_ssrc) == activeStreams.end()) {
+                int err;
+                UserAudioStream newStream;
+                newStream.decoder = opus_decoder_create(SAMPLE_RATE, CHANNELS, &err);
+                activeStreams[sender_ssrc] = newStream;
+            }
+
             std::vector<int16_t> pcm(FRAME_SIZE);
-            int decodedSamples = opus_decode(opusDecoder, opusData, opusSize, pcm.data(), FRAME_SIZE, 0);
+            int decodedSamples = opus_decode(activeStreams[sender_ssrc].decoder, opusData, opusSize, pcm.data(), FRAME_SIZE, 0);
 
             if (decodedSamples > 0) {
-                std::lock_guard<std::mutex> lock(bufferMutex);
-                jitterBuffer.push({pcm});
-                if (jitterBuffer.size() > 50) {
-                    jitterBuffer.pop();
+                activeStreams[sender_ssrc].jitterBuffer.push({pcm});
+                if (activeStreams[sender_ssrc].jitterBuffer.size() > 50) {
+                    activeStreams[sender_ssrc].jitterBuffer.pop();
                 }
             }
         }
@@ -195,7 +255,11 @@ MainWindow::MainWindow(QWidget *parent)
                             std::lock_guard<std::mutex> lock(nombreMutex);
                             nombreParaEnviar = miNombreGlobal;
                         }
-                        std::string response = "DISCOVER_RESPONSE:" + nombreParaEnviar;
+                        
+                        // Si somos Host, respondemos distinto para que se pongan como Sala
+                        std::string prefix = esHostGlobal.load() ? "ROOM_HOST:" : "DISCOVER_RESPONSE:";
+                        std::string response = prefix + nombreParaEnviar;
+                        
                         sendto(discSock, response.c_str(), response.length(), 0, (sockaddr*)&senderAddr, senderLen);
                     }
                 }
@@ -216,9 +280,17 @@ MainWindow::~MainWindow()
         opus_encoder_destroy(opusEncoder);
     }
     ::close(audioSockfd);
-    if (opusDecoder) {
-        opus_decoder_destroy(opusDecoder);
+    
+    // Destruir decodificadores de todos los usuarios
+    {
+        std::lock_guard<std::mutex> lock(streamsMutex);
+        for (auto& pair : activeStreams) {
+            if (pair.second.decoder) {
+                opus_decoder_destroy(pair.second.decoder);
+            }
+        }
     }
+    
     ::close(receiverSockfd);
     
     delete ui;
@@ -228,6 +300,9 @@ void MainWindow::on_btnBuscar_clicked()
 {
     ui->lstUsuarios->clear();
     ui->txtLogs->append("Buscando usuarios...");
+    
+    // Al buscar cancelamos si hubiésemos sido hosts
+    esHostGlobal.store(false);
 
     buscandoEquipos = true;
     
@@ -239,6 +314,30 @@ void MainWindow::on_btnBuscar_clicked()
     udpControlSocket->writeDatagram(mensaje, QHostAddress::Broadcast, 5001);
 
     discoveryTimer->start(2000);
+}
+
+void MainWindow::on_btnCrearSala_clicked()
+{
+    QString nombre = ui->txtNombreUsuario->text().trimmed();
+    if (nombre.isEmpty()) nombre = "MiSala";
+
+    esHostGlobal.store(true); // ¡Activamos el modo Relay/SFU!
+    
+    // Limpiamos los clientes previos que hubiera
+    {
+        std::lock_guard<std::mutex> lock(clientesMutex);
+        clientesEnSala.clear();
+    }
+    
+    ui->lstUsuarios->clear();
+    ui->txtLogs->append("¡Has creado la sala [" + nombre + "]!");
+    ui->txtLogs->append("Estás en modo Host. Los audios se reenviarán automáticamente a todos.");
+    ui->txtLogs->append("Puedes usar PTT en cualquier momento.");
+    
+    // Como somos el host, nos activamos el micrófono hacia la dirección loopback (opcional, o no hace falta ya que no enviamos, recibimos y reenviamos de nosotros).
+    // O simplemente habilitamos el PTT (Audio se enviará cuando los demás se conecten a nosotros).
+    
+    ui->btnPTT->setEnabled(true);
 }
 
 void MainWindow::finDescubrimiento()
@@ -256,15 +355,23 @@ void MainWindow::procesarRespuestaUDP()
 
         QString respuesta = QString::fromUtf8(datagram.data());
 
-        if (respuesta.startsWith("DISCOVER_RESPONSE:")) {
+        if (respuesta.startsWith("DISCOVER_RESPONSE:") || respuesta.startsWith("ROOM_HOST:")) {
             QString ipDetectada = datagram.senderAddress().toString();
             if (ipDetectada.startsWith("::ffff:")) ipDetectada = ipDetectada.mid(7);
+            
+            bool isRoom = respuesta.startsWith("ROOM_HOST:");
+            QString nombreUsuario = isRoom ? respuesta.mid(10) : respuesta.mid(18);
 
-            QString nombreUsuario = respuesta.mid(18);
-
-            QString textoElemento = nombreUsuario + " (" + ipDetectada + ")";
+            QString textoElemento = (isRoom ? "[SALA] " : "") + nombreUsuario + " (" + ipDetectada + ")";
             QListWidgetItem *item = new QListWidgetItem(textoElemento, ui->lstUsuarios);
-            item->setData(Qt::UserRole, ipDetectada); // Guardar silenciosamente la IP pura
+            item->setData(Qt::UserRole, ipDetectada);
+            
+            if (isRoom) {
+               item->setForeground(Qt::blue);
+               QFont font = item->font();
+               font.setBold(true);
+               item->setFont(font);
+            }
             
             ui->txtLogs->append("Encontrado: " + textoElemento);
         }
@@ -273,6 +380,9 @@ void MainWindow::procesarRespuestaUDP()
 
 void MainWindow::onUsuarioSeleccionado(QListWidgetItem *item)
 {
+    // Al unirte a una persona o sala, tú no eres Host
+    esHostGlobal.store(false);
+
     QString ipDetectada = item->data(Qt::UserRole).toString();
     ui->txtLogs->append("Conectando con: " + item->text());
 

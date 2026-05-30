@@ -21,6 +21,7 @@ public:
 
 private slots:
     void on_btnBuscar_clicked();
+    void on_btnCrearSala_clicked(); // <-- Botón de crear sala
     void procesarRespuestaUDP(); // <-- AGREGA ESTO (Función para escuchar la IP)
     void on_btnPTT_pressed();  // <-- AGREGA ESTO
     void on_btnPTT_released(); // <-- AGREGA ESTO
