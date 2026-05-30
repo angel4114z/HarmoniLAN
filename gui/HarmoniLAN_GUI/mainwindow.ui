@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>800</width>
-    <height>600</height>
+    <height>349</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -17,9 +17,9 @@
    <widget class="QPushButton" name="btnPTT">
     <property name="geometry">
      <rect>
-      <x>50</x>
+      <x>30</x>
       <y>100</y>
-      <width>84</width>
+      <width>121</width>
       <height>25</height>
      </rect>
     </property>
@@ -27,11 +27,27 @@
      <string>PTT</string>
     </property>
    </widget>
+   <widget class="QLineEdit" name="txtNombreUsuario">
+    <property name="geometry">
+     <rect>
+      <x>40</x>
+      <y>40</y>
+      <width>113</width>
+      <height>25</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>YoGUI</string>
+    </property>
+    <property name="placeholderText">
+     <string>Tu Nombre</string>
+    </property>
+   </widget>
    <widget class="QPushButton" name="btnBuscar">
     <property name="geometry">
      <rect>
-      <x>490</x>
-      <y>100</y>
+      <x>570</x>
+      <y>240</y>
       <width>121</width>
       <height>25</height>
      </rect>
@@ -53,14 +69,24 @@
    <widget class="QCheckBox" name="chkHablaContinua">
     <property name="geometry">
      <rect>
-      <x>40</x>
-      <y>170</y>
+      <x>30</x>
+      <y>160</y>
       <width>121</width>
       <height>23</height>
      </rect>
     </property>
     <property name="text">
      <string>Habla continua</string>
+    </property>
+   </widget>
+   <widget class="QListWidget" name="lstUsuarios">
+    <property name="geometry">
+     <rect>
+      <x>500</x>
+      <y>40</y>
+      <width>261</width>
+      <height>181</height>
+     </rect>
     </property>
    </widget>
   </widget>

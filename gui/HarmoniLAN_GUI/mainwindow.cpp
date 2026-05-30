@@ -12,11 +12,9 @@
 #include <mutex>
 #include <thread>
 
-// Puerto de recepción de audio (según tu código)
 #define RECEIVER_PORT 5000 
 #define FRAME_SIZE 960
 
-// Variables globales del RECEPTOR
 OpusDecoder *opusDecoder;
 int receiverSockfd;
 
@@ -26,7 +24,6 @@ struct AudioFrame {
 std::queue<AudioFrame> jitterBuffer;
 std::mutex bufferMutex;
 
-// CALLBACK DEL RECEPTOR (Tu código exacto de consola con Jitter Buffer)
 static int receiverAudioCallback(
     const void *inputBuffer, void *outputBuffer,
     unsigned long framesPerBuffer,
@@ -43,7 +40,6 @@ static int receiverAudioCallback(
             *out++ = frame.samples[i];
         }
     } else {
-        // Silencio si el buffer está vacío
         for (int i = 0; i < FRAME_SIZE; i++) {
             *out++ = 0;
         }
@@ -56,9 +52,9 @@ static int receiverAudioCallback(
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
 #define FRAME_SIZE 960
-#define AUDIO_PORT 5000 // Puerto para el audio (RTP)
+#define AUDIO_PORT 5000
 
-// Variables globales para el streaming
+// Variables para el sender
 int audioSockfd;
 sockaddr_in audioServerAddr;
 OpusEncoder *opusEncoder;
@@ -68,10 +64,11 @@ uint16_t sequenceNumber = 0;
 uint32_t timestamp = 0;
 uint32_t ssrc = 12345;
 
-// El puente de control: un booleano global accesible por el callback
 std::atomic<bool> enviarAudio(false);
 
-// TU CALLBACK ORIGINAL CON EL FILTRO PTT
+std::string miNombreGlobal = "YoGUI";
+std::mutex nombreMutex;
+
 static int audioCallback(
     const void *inputBuffer, void *outputBuffer,
     unsigned long framesPerBuffer,
@@ -80,8 +77,6 @@ static int audioCallback(
 ) {
     if (inputBuffer == nullptr) return paContinue;
 
-    // !!! EL TRUCO DEL PTT !!!
-    // Si el botón NO está presionado, ignoramos el micrófono y no enviamos nada por red
     if (!enviarAudio.load()) {
         return paContinue;
     }
@@ -93,7 +88,7 @@ static int audioCallback(
 
     if (encodedBytes > 0) {
         char packet[4096];
-        RTPHeader header{}; // Estructura rtp.h que ya tienes
+        RTPHeader header{};
             
         header.versionPayload = 0x80;
         header.payloadType = 111;
@@ -120,21 +115,24 @@ MainWindow::MainWindow(QWidget *parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
+    
+    buscandoEquipos = false;
+    discoveryTimer = new QTimer(this);
+    discoveryTimer->setSingleShot(true);
+    connect(discoveryTimer, &QTimer::timeout, this, &MainWindow::finDescubrimiento);
+    
+    connect(ui->lstUsuarios, &QListWidget::itemClicked, this, &MainWindow::onUsuarioSeleccionado);
 
-    // 1. Inicializar Socket de Control y Señales de Qt (Lo que ya tenías)
     udpControlSocket = new QUdpSocket(this);
     connect(udpControlSocket, &QUdpSocket::readyRead, this, &MainWindow::procesarRespuestaUDP);
 
-    // =================================================================
-    // NÚCLEO DEL RECEPTOR (Código de tu receiver.cpp integrado en Qt)
-    // =================================================================
     int err;
     opusDecoder = opus_decoder_create(SAMPLE_RATE, CHANNELS, &err);
     
     receiverSockfd = socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in recAddr{};
     recAddr.sin_family = AF_INET;
-    recAddr.sin_port = htons(RECEIVER_PORT); // Escucha en el puerto 5000
+    recAddr.sin_port = htons(RECEIVER_PORT);
     recAddr.sin_addr.s_addr = INADDR_ANY;
     ::bind(receiverSockfd, (sockaddr*)&recAddr, sizeof(recAddr));
 
@@ -165,18 +163,13 @@ MainWindow::MainWindow(QWidget *parent)
     });
     receiverNetworkThread.detach();
 
-    // Arrancar PortAudio para la REPRODUCCIÓN (Output)
     Pa_Initialize();
     PaStream *receiverStream;
-    // Notar que pasamos '1' en outputChannels y '0' en inputChannels
     Pa_OpenDefaultStream(&receiverStream, 0, 1, paInt16, SAMPLE_RATE, FRAME_SIZE, receiverAudioCallback, nullptr);
     Pa_StartStream(receiverStream);
 
-    ui->txtLogs->append("Sistema Receptor escuchando activamente en puerto 5000...");
+    ui->txtLogs->append("Receptor iniciado");
     
-    // =================================================================
-    // HILO DE RESPUESTA AL BROADCAST (Tu discovery.cpp integrado)
-    // =================================================================
     std::thread discoveryThread([]() {
         int discSock = socket(AF_INET, SOCK_DGRAM, 0);
         int broadcastEnable = 1;
@@ -195,9 +188,15 @@ MainWindow::MainWindow(QWidget *parent)
                 int bytes = recvfrom(discSock, buffer, sizeof(buffer) - 1, 0, (sockaddr*)&senderAddr, &senderLen);
                 if (bytes > 0) {
                     buffer[bytes] = '\0';
-                    if (strcmp(buffer, "DISCOVER") == 0) {
-                        const char* response = "DISCOVER_RESPONSE:HarmoniLAN";
-                        sendto(discSock, response, strlen(response), 0, (sockaddr*)&senderAddr, senderLen);
+                    std::string msg(buffer);
+                    if (msg.rfind("DISCOVER", 0) == 0) {
+                        std::string nombreParaEnviar;
+                        {
+                            std::lock_guard<std::mutex> lock(nombreMutex);
+                            nombreParaEnviar = miNombreGlobal;
+                        }
+                        std::string response = "DISCOVER_RESPONSE:" + nombreParaEnviar;
+                        sendto(discSock, response.c_str(), response.length(), 0, (sockaddr*)&senderAddr, senderLen);
                     }
                 }
             }
@@ -208,7 +207,6 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    // Detener PortAudio y liberar Opus limpiamente al salir
     if (audioStream) {
         Pa_StopStream(audioStream);
         Pa_CloseStream(audioStream);
@@ -226,90 +224,129 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-// 1. LO QUE VA EXACTAMENTE EN TU BOTÓN BUSCAR:
 void MainWindow::on_btnBuscar_clicked()
 {
-    // Escribimos en tu Text Edit (consola visual)
-    ui->txtLogs->append("Enviando Broadcast de búsqueda...");
+    ui->lstUsuarios->clear();
+    ui->txtLogs->append("Buscando usuarios...");
 
-    QByteArray mensaje = "DISCOVER";
+    buscandoEquipos = true;
     
-    // Enviamos el broadcast al puerto 5001 tal como lo tenías en tu código de consola
+    QString nombre = ui->txtNombreUsuario->text().trimmed();
+    if (nombre.isEmpty()) nombre = "Anonimo_GUI";
+    
+    QByteArray mensaje = "DISCOVER:" + nombre.toUtf8();
+
     udpControlSocket->writeDatagram(mensaje, QHostAddress::Broadcast, 5001);
+
+    discoveryTimer->start(2000);
 }
 
-// 2. LA FUNCIÓN QUE RECIBE LA RESPUESTA DE LA RED (Pégala justo abajo):
+void MainWindow::finDescubrimiento()
+{
+    buscandoEquipos = false;
+    ui->txtLogs->append("Búsqueda finalizada. Selecciona un usuario en la lista.");
+}
+
 void MainWindow::procesarRespuestaUDP()
 {
     while (udpControlSocket->hasPendingDatagrams()) {
         QNetworkDatagram datagram = udpControlSocket->receiveDatagram();
+        
+        if (!buscandoEquipos) continue;
+
         QString respuesta = QString::fromUtf8(datagram.data());
 
-        // Verificamos si la respuesta es la de tu servidor HarmoniLAN
-        if (respuesta.contains("DISCOVER_RESPONSE:HarmoniLAN")) {
+        if (respuesta.startsWith("DISCOVER_RESPONSE:")) {
             QString ipDetectada = datagram.senderAddress().toString();
-
             if (ipDetectada.startsWith("::ffff:")) ipDetectada = ipDetectada.mid(7);
 
-                ui->txtLogs->append("¡Equipo detectado! IP: " + ipDetectada);
+            QString nombreUsuario = respuesta.mid(18);
 
-                // === INICIALIZACIÓN DEL AUDIO EX-SENDER.CPP ===
-                int err;
-                opusEncoder = opus_encoder_create(SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_VOIP, &err);
-
-                audioSockfd = socket(AF_INET, SOCK_DGRAM, 0);
-                audioServerAddr.sin_family = AF_INET;
-                audioServerAddr.sin_port = htons(AUDIO_PORT); // Puerto 5000
-                inet_pton(AF_INET, ipDetectada.toStdString().c_str(), &audioServerAddr.sin_addr);
-
-                Pa_Initialize();
-                Pa_OpenDefaultStream(&audioStream, 1, 0, paInt16, SAMPLE_RATE, FRAME_SIZE, audioCallback, nullptr);
-                Pa_StartStream(audioStream);
-
-                ui->txtLogs->append("Canal de audio RTP listo. Mantén presionado PTT para hablar.");
-                ui->btnPTT->setEnabled(true); // Ya podemos hablar
-            }
+            QString textoElemento = nombreUsuario + " (" + ipDetectada + ")";
+            QListWidgetItem *item = new QListWidgetItem(textoElemento, ui->lstUsuarios);
+            item->setData(Qt::UserRole, ipDetectada); // Guardar silenciosamente la IP pura
+            
+            ui->txtLogs->append("Encontrado: " + textoElemento);
+        }
     }
+}
+
+void MainWindow::onUsuarioSeleccionado(QListWidgetItem *item)
+{
+    QString ipDetectada = item->data(Qt::UserRole).toString();
+    ui->txtLogs->append("Conectando con: " + item->text());
+
+    if (audioStream) {
+        Pa_StopStream(audioStream);
+        Pa_CloseStream(audioStream);
+        audioStream = nullptr;
+    }
+    if (opusEncoder) {
+        opus_encoder_destroy(opusEncoder);
+        opusEncoder = nullptr;
+    }
+
+    int err;
+    opusEncoder = opus_encoder_create(SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_VOIP, &err);
+
+    audioSockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    audioServerAddr.sin_family = AF_INET;
+    audioServerAddr.sin_port = htons(AUDIO_PORT); // Puerto 5000
+    inet_pton(AF_INET, ipDetectada.toStdString().c_str(), &audioServerAddr.sin_addr);
+
+    Pa_OpenDefaultStream(&audioStream, 1, 0, paInt16, SAMPLE_RATE, FRAME_SIZE, audioCallback, nullptr);
+    Pa_StartStream(audioStream);
+
+    ui->txtLogs->append("Canal de audio RTP listo para " + ipDetectada + ". Puedes hablar.");
+    ui->btnPTT->setEnabled(true);
 }
 
 // CUANDO MANTIENES PRESIONADO EL BOTÓN
 void MainWindow::on_btnPTT_pressed()
 {
-    enviarAudio.store(true); // Abre la compuerta en el callback de PortAudio
-    ui->btnPTT->setText("¡TRANSMITIENDO EN VIVO!");
+    enviarAudio.store(true);
+    ui->btnPTT->setText("Transmitiendo");
     ui->btnPTT->setStyleSheet("background-color: #ff4d4d; color: white; font-weight: bold;");
 }
 
-// CUANDO SUELTAS EL BOTÓN
 void MainWindow::on_btnPTT_released()
 {
     enviarAudio.store(false); // Cierra la compuerta, el audio deja de enviarse
-    ui->btnPTT->setText("Presionar para Hablar (PTT)");
+    ui->btnPTT->setText("PTT");
     ui->btnPTT->setStyleSheet(""); // Vuelve al color normal
 }
 
 void MainWindow::on_chkHablaContinua_toggled(bool checked)
 {
     if (checked) {
-        // Activamos la transmisión permanente
+        // Activar la transmisión permanente
         enviarAudio.store(true);
 
-        // Desactivamos el botón de PTT para que el usuario no se confunda
+        // Desactivar el botón de PTT
         ui->btnPTT->setEnabled(false);
-        ui->btnPTT->setText("Micrófono Abierto (Habla Continua)");
-        ui->btnPTT->setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold;"); // Color verde
+        ui->btnPTT->setText("Transmitiendo");
+        ui->btnPTT->setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold;"); //
 
         ui->txtLogs->append("Modo habla continua activado. Micrófono abierto.");
     } else {
-        // Apagamos la transmisión permanente
+        // Apagar la transmisión permanente
         enviarAudio.store(false);
 
-        // Reactivamos el botón PTT a su estado normal
+        // Reactivar el botón PTT a su estado normal
         ui->btnPTT->setEnabled(true);
-        ui->btnPTT->setText("Presionar para Hablar (PTT)");
-        ui->btnPTT->setStyleSheet(""); // Color normal
+        ui->btnPTT->setText("PTT");
+        ui->btnPTT->setStyleSheet("");
 
         ui->txtLogs->append("Modo habla continua desactivado. Volviendo a PTT.");
     }
+}
+
+void MainWindow::on_txtNombreUsuario_textChanged(const QString &arg1)
+{
+    QString nombre = arg1.trimmed();
+    if (nombre.isEmpty()) nombre = "Anonimo_GUI";
+    
+    std::lock_guard<std::mutex> lock(nombreMutex);
+    miNombreGlobal = nombre.toStdString();
 }
 

@@ -1,12 +1,14 @@
 #include <iostream>
-
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <string>
 
 #define CONTROL_PORT 5001
 
-int main() {
+int main(int argc, char* argv[]) {
+
+    std::string my_name = (argc > 1) ? argv[1] : "Usuario_Anonimo";
 
     int sockfd =
         socket(AF_INET, SOCK_DGRAM, 0);
@@ -34,7 +36,7 @@ int main() {
     );
 
     std::cout
-        << "Esperando discovery...\n";
+        << "Escuchando en la red como: " << my_name << "...\n";
 
     while (true) {
 
@@ -57,24 +59,22 @@ int main() {
         if (bytesReceived > 0) {
 
             buffer[bytesReceived] = '\0';
+            std::string message(buffer);
 
             std::cout
                 << "Mensaje: "
-                << buffer
+                << message
                 << "\n";
 
-            if (
-                strcmp(buffer, "DISCOVER")
-                == 0
-            ) {
+            if (message.rfind("DISCOVER", 0) == 0) {
 
-                const char* response =
-                    "DISCOVER_RESPONSE:HarmoniLAN";
+                std::string response =
+                    "DISCOVER_RESPONSE:" + my_name;
 
                 sendto(
                     sockfd,
-                    response,
-                    strlen(response),
+                    response.c_str(),
+                    response.length(),
                     0,
                     (sockaddr*)&senderAddr,
                     senderLen
