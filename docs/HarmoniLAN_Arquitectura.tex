@@ -1,0 +1,56 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper, margin=2.5cm}
+
+\title{\textbf{HarmoniLAN: Arquitectura y Detalles de Implementacion}}
+\author{Documentacion Tecnica}
+\date{Mayo 2026}
+
+\begin{document}
+\maketitle
+
+\section{Introduccion}
+HarmoniLAN esta diseñado como una aplicacion C++17 orientada a redes LAN, con una separacion estricta entre dos capas logicas: un protocolo de control transaccional (puerto 5001) y la infraestructura de transmision de datos y voz en tiempo real (puerto 5000).
+
+\section{El Pipeline de Audio (Transmision y Recepcion)}
+El proceso central de la arquitectura rige su comportamiento manipulando rutinas de captura, compresion de espectro y restauracion paralela hacia una multiplicidad de nodos receptores.
+
+\subsection{Proceso de Emision (Metodo \texttt{audioCallback})}
+La transmision arranca con PortAudio mediante la iniciacion de \texttt{Pa\_OpenDefaultStream}. Dicha libreria ejecuta el metodo \texttt{audioCallback} contantemente en segundo plano. El proceso consta de los siguientes pasos formales:
+\begin{enumerate}
+    \item \textbf{Verificacion de Estado (PTT)}: Valida en tiempo de ejecucion el booleano atomico \texttt{enviarAudio}. En caso de estado reposo, evita el desgaste computacional devolviendo inmediatamente el tipo de dato nativo \texttt{paContinue}.
+    \item \textbf{Transformacion y Compresion}: Aplicando los vectores PCM crudos capturados a 16-bits, se invoca al nucleo local mediante \texttt{opus\_encode()} pasandole sus punteros. Este genera reduccion acustica algoritmica extrema bajando la inercia del transporte red.
+    \item \textbf{Paquetizacion RTP}: Concede una cabecera estandarizada empleando \texttt{RTPHeader}, a la cual se incrustan atributos intrinsecos de orden serial, como \texttt{sequenceNumber}, cronologia \texttt{timestamp} y el marcador \texttt{ssrc} fundamental para distinguir procedencias multiples en hilos alternos.
+    \item \textbf{Despacho UDP}: Clona en memoria fisica plana (con la instruccion C estandar \texttt{memcpy}) al encabezado acoplado a la codificacion OPUS enviando su dimension por el socket principal empleando las metodologias de Berkeley y la instruccion \texttt{sendto()}.
+\end{enumerate}
+
+\subsection{Proceso de Recepcion y Mezcla}
+Se orquesta en paralelo subdividiendo responsabilidades entre lectura asincrona y generacion final reproductiva:
+\begin{enumerate}
+    \item \textbf{Captura Asincrona (Hilo de Red)}: Mediante instanciacion \texttt{std::thread}, se aplica la lectura ciclica usando la instruccion de bloque \texttt{recvfrom()} en el puerto acustico designado. En base a los encabezados, abstrae el factor originario (\texttt{ntohl(header.ssrc)}) para buscar un perfil de decodificacion en el mapa o registrar un puntero nuevo llamando repetitivamente a \texttt{opus\_decoder\_create()} y \texttt{opus\_decode()}. Dichas des-compresiones PCM se archivan en colas seguras anti red-jitter.
+    \item \textbf{Reproduccion Sincronizada (\texttt{receiverAudioCallback})}: Cuando el Hardware demanda volcado al buffer \texttt{outputBuffer}, el metodo itera los N elementos del mapa extrayendo todas sus tramas PCM registradas. Suma los valores dentro de un formato mas amplio de datos (\texttt{int32\_t}) limitando finalmente por barreras de comparadores simples la cifra entre las extremidades \texttt{[-32768, 32767]} para prevenir ruidos indeseables por saturacion.
+\end{enumerate}
+
+\section{Protocolo de Descubrimiento (Puerto 5001)}
+Permite a los usuarios conectarse prescindiendo de conocimiento sobre IPs del host mediante peticiones generadas con la libreria de \texttt{QUdpSocket}:
+\begin{itemize}
+    \item \textbf{Descubrimiento (\texttt{DISCOVER}):} Emite un patron basico direccionado a la banda \texttt{255.255.255.255} con las nomenclaturas de interfaz del nodo solicitante.
+    \item \textbf{Identificacion:} Un hilo persistente \texttt{discoveryThread} se restringe a analizar las cuerdas del canal recibiendo la solicitud. Contesta la llamada directamente de forma Unicast adjuntando el perfil de sesion o el estado de host a traves de codigos meta como \texttt{ROOM\_HOST} o alternativamente \texttt{DISCOVER\_RESPONSE}.
+\end{itemize}
+
+\section{Arquitectura SFU y Reenvio Condicionado}
+Para solventar cuellos de botella presentes en topologias Mesh (Todos-A-Todos), HarmoniLAN incorpora el sub-sistema Selective Forwarding Unit simplificado.
+Cuando el usuario define la rutinas guiadas estableciendo \texttt{esHostGlobal = true}, produce el siguiente escenario matematico-logico:
+
+\begin{enumerate}
+    \item Memoriza mediante conversion \texttt{INET\_ADDRSTRLEN} vectores alfanumericos pareados con estructuras de C \texttt{sockaddr\_in} que emitan algun trafico constante sobre el puerto original 5000 insertandolos en \texttt{clientesEnSala}.
+    \item Acepta los datagramas, reubicando al bucle generico a la clonacion del elemento \texttt{packet} integro hacia las direcciones que formen el enjambre o registro, excluyendose estrictamente asi misma para evitar eco, y en clausula \texttt{if (ipDest != currentIp)} limitando que el algoritmo SFU rebote paquetes al remitente que declaro el propio envio, garantizando estatica del canal de voz.
+\end{enumerate}
+
+\end{document}
