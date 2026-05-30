@@ -11,14 +11,14 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>HarmoniLAN</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <widget class="QPushButton" name="btnPTT">
     <property name="geometry">
      <rect>
-      <x>30</x>
-      <y>100</y>
+      <x>20</x>
+      <y>120</y>
       <width>121</width>
       <height>25</height>
      </rect>
@@ -30,8 +30,8 @@
    <widget class="QLineEdit" name="txtNombreUsuario">
     <property name="geometry">
      <rect>
-      <x>40</x>
-      <y>40</y>
+      <x>30</x>
+      <y>60</y>
       <width>113</width>
       <height>25</height>
      </rect>
@@ -46,8 +46,8 @@
    <widget class="QPushButton" name="btnBuscar">
     <property name="geometry">
      <rect>
-      <x>570</x>
-      <y>240</y>
+      <x>20</x>
+      <y>200</y>
       <width>121</width>
       <height>25</height>
      </rect>
@@ -59,18 +59,18 @@
    <widget class="QTextEdit" name="txtLogs">
     <property name="geometry">
      <rect>
-      <x>180</x>
-      <y>40</y>
+      <x>170</x>
+      <y>50</y>
       <width>271</width>
-      <height>181</height>
+      <height>191</height>
      </rect>
     </property>
    </widget>
    <widget class="QCheckBox" name="chkHablaContinua">
     <property name="geometry">
      <rect>
-      <x>30</x>
-      <y>160</y>
+      <x>20</x>
+      <y>150</y>
       <width>121</width>
       <height>23</height>
      </rect>
@@ -83,10 +83,49 @@
     <property name="geometry">
      <rect>
       <x>500</x>
-      <y>40</y>
+      <y>50</y>
       <width>261</width>
-      <height>181</height>
+      <height>191</height>
      </rect>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label">
+    <property name="geometry">
+     <rect>
+      <x>20</x>
+      <y>40</y>
+      <width>131</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Nombre del equipo:</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_2">
+    <property name="geometry">
+     <rect>
+      <x>290</x>
+      <y>30</y>
+      <width>65</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Logs:</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_3">
+    <property name="geometry">
+     <rect>
+      <x>560</x>
+      <y>30</y>
+      <width>141</width>
+      <height>17</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Equipos disponibles</string>
     </property>
    </widget>
   </widget>
